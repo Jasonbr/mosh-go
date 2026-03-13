@@ -1,0 +1,6 @@
+mosh
+mosh-client
+mosh-server
+*.test
+*.exe
+*.out
