@@ -20,6 +20,14 @@ type Client struct {
 	output  []byte // accumulated terminal output
 	outputC chan struct{}
 
+	// Action tracking for cumulative diffs.
+	actionsMu        sync.Mutex
+	actions          []UserInstruction
+	ackedActionCount int                // how many actions the server has
+	lastAcked        uint64
+	sentActionCounts map[uint64]int     // sentNum → action count at that state
+	dirty            bool               // true = new actions since last tick
+
 	done chan struct{}
 	wg   sync.WaitGroup
 }
@@ -50,18 +58,20 @@ func Dial(host string, port int, key string) (*Client, error) {
 	}
 
 	c := &Client{
-		conn:      conn,
-		transport: NewTransport(ocb, false),
-		ocb:       ocb,
-		outputC:   make(chan struct{}, 1),
-		done:      make(chan struct{}),
+		conn:             conn,
+		transport:        NewTransport(ocb, false),
+		ocb:              ocb,
+		outputC:          make(chan struct{}, 1),
+		done:             make(chan struct{}),
+		sentActionCounts: make(map[uint64]int),
 	}
 
 	c.wg.Add(2)
 	go c.recvLoop()
 	go c.sendLoop()
 
-	// Send initial empty datagram to associate with the server.
+	// Send initial keepalive to associate with the server.
+	c.transport.ForceNextSend()
 	c.tick()
 
 	return c, nil
@@ -69,20 +79,20 @@ func Dial(host string, port int, key string) (*Client, error) {
 
 // Send sends keystrokes to the server.
 func (c *Client) Send(keys []byte) {
-	diff := MarshalUserMessage([]UserInstruction{{Keys: keys}})
-	c.transport.SetPending(diff)
-	c.tick()
+	c.actionsMu.Lock()
+	c.actions = append(c.actions, UserInstruction{Keys: append([]byte{}, keys...)})
+	c.dirty = true
+	c.actionsMu.Unlock()
 }
 
 // Resize sends a resize to the server.
 func (c *Client) Resize(cols, rows uint16) {
-	diff := MarshalUserMessage([]UserInstruction{{
-		Width:  int32(cols),
-		Height: int32(rows),
-	}})
-	c.transport.SetPending(diff)
-	c.tick()
+	c.actionsMu.Lock()
+	c.actions = append(c.actions, UserInstruction{Width: int32(cols), Height: int32(rows)})
+	c.dirty = true
+	c.actionsMu.Unlock()
 }
+
 
 // Recv reads accumulated terminal output, blocking until output is available
 // or the timeout expires. Returns nil on timeout.
@@ -132,8 +142,33 @@ func (c *Client) Transport() *Transport {
 }
 
 func (c *Client) tick() {
+	// Batch: compute diff from accumulated actions.
+	c.actionsMu.Lock()
+	if c.dirty {
+		c.dirty = false
+		c.processAcksLocked()
+		newActions := c.actions[c.ackedActionCount:]
+		c.transport.SetPending(MarshalUserMessage(newActions))
+		c.sentActionCounts[c.transport.SentNum()+1] = len(c.actions)
+	}
+	c.actionsMu.Unlock()
+
 	for _, dg := range c.transport.Tick() {
 		c.conn.Write(dg)
+	}
+}
+
+func (c *Client) processAcksLocked() {
+	acked := c.transport.AckedByRemote()
+	if acked > c.lastAcked {
+		c.lastAcked = acked
+		// Only advance base when server caught up (no states in flight).
+		if acked >= c.transport.SentNum() {
+			if count, ok := c.sentActionCounts[acked]; ok && count > c.ackedActionCount {
+				c.ackedActionCount = count
+			}
+			c.sentActionCounts = make(map[uint64]int)
+		}
 	}
 }
 

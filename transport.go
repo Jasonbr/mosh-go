@@ -26,13 +26,18 @@ type Transport struct {
 
 	// Outgoing state (SSP §3).
 	sentNum      uint64 // newest state we've sent (new_num)
-	ackedNum     uint64 // newest state the remote has acknowledged (ack from remote)
-	pendingDiff  []byte // diff payload waiting to be sent
+	ackedByRemote uint64 // newest state the remote has acknowledged
+	pendingDiff    []byte // diff payload waiting to be sent
+	diffSent       bool   // true = pendingDiff has been sent at least once
+	diffOldNum     uint64 // locked oldNum for all diffs until base advances
+	hasPendingBase bool   // true = diffOldNum is locked
+	pendingDataAck bool   // true = send ack ASAP (received data, not just ack)
 
-	// Incoming state.
-	recvNum      uint64 // newest state we've received from remote (their new_num)
-	recvAck      uint64 // what we've told the remote we received (our ack_num)
-	throwawayNum uint64 // oldest state we still hold
+	// Incoming state — list of received state nums for old_num validation.
+	receivedNums []uint64 // ordered list of state nums we have
+	ackNum       uint64   // latest received state num
+	sentAckNum   uint64   // last ackNum we actually sent on wire
+	throwawayNum uint64   // oldest state we still hold
 
 	// Sequence counter for the crypto layer (independent of SSP state numbering).
 	seqOut      uint64
@@ -67,10 +72,11 @@ const (
 // NewTransport creates a transport. isServer determines direction bits.
 func NewTransport(ocb *OCB, isServer bool) *Transport {
 	t := &Transport{
-		ocb:      ocb,
-		rto:      initialRTO,
-		lastSend: time.Now(),
-		lastRecv: time.Now(),
+		ocb:          ocb,
+		rto:          initialRTO,
+		lastSend:     time.Now(),
+		lastRecv:     time.Now(),
+		receivedNums: []uint64{0}, // start with state 0
 	}
 	if isServer {
 		t.toRemote = dirToClient
@@ -107,9 +113,19 @@ func (t *Transport) HasCap(bit byte) bool {
 	return (t.localCaps[idx] & t.remoteCaps[idx] & bit) != 0
 }
 
+// ForceNextSend forces the next tick to send, even with no pending diff.
+func (t *Transport) ForceNextSend() {
+	t.mu.Lock()
+	t.lastSend = time.Time{} // zero time, always expired
+	t.mu.Unlock()
+}
+
 // SetPending sets the diff payload to send on the next tick.
 func (t *Transport) SetPending(diff []byte) {
 	t.mu.Lock()
+	if len(diff) > 0 {
+		t.diffSent = false
+	}
 	t.pendingDiff = diff
 	t.mu.Unlock()
 }
@@ -124,29 +140,44 @@ func (t *Transport) Tick() [][]byte {
 
 	// Decide if we should send.
 	haveDiff := len(t.pendingDiff) > 0
-	needAck := t.recvNum > t.recvAck
-	expired := now.Sub(t.lastSend) >= t.rto
+	haveNewDiff := haveDiff && !t.diffSent
+	needAck := t.ackNum > t.sentAckNum
+	sinceLastSend := now.Sub(t.lastSend)
+	expired := sinceLastSend >= t.rto
+	urgentAck := t.pendingDataAck
 
-	if !haveDiff && !needAck && !expired {
+	shouldSend := haveNewDiff || needAck || expired || urgentAck
+	if !shouldSend {
 		return nil
 	}
 
 	// Build TransportInstruction.
-	if haveDiff {
+	if haveNewDiff {
 		t.sentNum++
+		t.diffSent = true
+		if !t.hasPendingBase {
+			t.diffOldNum = t.ackedByRemote
+			t.hasPendingBase = true
+		}
+	}
+	t.pendingDataAck = false
+
+	oldNum := t.ackedByRemote
+	if haveDiff {
+		oldNum = t.diffOldNum // use locked oldNum for diff retransmissions
 	}
 
 	ti := TransportInstruction{
-		ProtocolVersion: 2, // mosh protocol version
-		OldNum:          t.ackedNum,
+		ProtocolVersion: 2,
+		OldNum:          oldNum,
 		NewNum:          t.sentNum,
-		AckNum:          t.recvNum,
-		ThrowawayNum:    t.throwawayNum,
+		AckNum:          t.ackNum,
+		ThrowawayNum:    0, // client doesn't tell server to throw away states
 		Diff:            t.pendingDiff,
 		LatchCaps:       t.localCaps,
 	}
-	t.recvAck = t.recvNum
-	t.pendingDiff = nil
+	t.sentAckNum = t.ackNum
+	// Do NOT nil pendingDiff — keep for retransmission until server acks.
 
 	// Marshal → compress → fragment → encrypt.
 	pbData := ti.Marshal()
@@ -250,20 +281,82 @@ func (t *Transport) Recv(wire []byte) []byte {
 		t.mu.Unlock()
 	}
 
-	// Process SSP fields.
+	// Process SSP fields (matching upstream mosh recv logic).
 	t.mu.Lock()
-	if ti.AckNum > t.ackedNum {
-		t.ackedNum = ti.AckNum
+	defer t.mu.Unlock()
+
+	// Process ack from remote.
+	if ti.AckNum > t.ackedByRemote {
+		t.ackedByRemote = ti.AckNum
+		if t.ackedByRemote >= t.sentNum && t.pendingDiff != nil {
+			t.pendingDiff = nil
+			t.diffSent = false
+			t.hasPendingBase = false
+		}
 	}
-	if ti.NewNum > t.recvNum {
-		t.recvNum = ti.NewNum
+
+	// Check if we already have new_num (dedup).
+	for _, n := range t.receivedNums {
+		if n == ti.NewNum {
+			return nil
+		}
 	}
+
+	// Check if we have old_num (required to apply diff).
+	hasOld := false
+	for _, n := range t.receivedNums {
+		if n == ti.OldNum {
+			hasOld = true
+			break
+		}
+	}
+	if !hasOld {
+		return nil
+	}
+
+	// Process throwaway.
 	if ti.ThrowawayNum > t.throwawayNum {
 		t.throwawayNum = ti.ThrowawayNum
+		filtered := t.receivedNums[:0]
+		for _, n := range t.receivedNums {
+			if n >= t.throwawayNum {
+				filtered = append(filtered, n)
+			}
+		}
+		t.receivedNums = filtered
 	}
-	t.mu.Unlock()
+
+	// Add new state.
+	t.receivedNums = append(t.receivedNums, ti.NewNum)
+
+	// Bound the list.
+	if len(t.receivedNums) > 128 {
+		t.receivedNums = t.receivedNums[1:]
+	}
+
+	// Update ack num to latest received state.
+	t.ackNum = ti.NewNum
+
+	// Trigger immediate ack when we receive data.
+	if len(ti.Diff) > 0 {
+		t.pendingDataAck = true
+	}
 
 	return ti.Diff
+}
+
+// AckedByRemote returns the highest state number the remote has acked.
+func (t *Transport) AckedByRemote() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.ackedByRemote
+}
+
+// SentNum returns the current sent state number.
+func (t *Transport) SentNum() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sentNum
 }
 
 // LastRecv returns the time of the last received datagram.
