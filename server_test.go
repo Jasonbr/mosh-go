@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,13 @@ import (
 
 	"github.com/creack/pty"
 )
+
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+
+// stripANSI removes CSI escape sequences from s.
+func stripANSI(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
+}
 
 func TestGenerateKey(t *testing.T) {
 	key, b64, err := GenerateKey()
@@ -175,13 +183,13 @@ func TestServerE2E(t *testing.T) {
 	for !found {
 		select {
 		case <-deadline:
-			t.Fatalf("marker not echoed. Got: %q", allOutput)
+			t.Fatalf("marker not echoed. Got: %q", stripANSI(allOutput))
 		default:
 		}
 		payload := recvClient(500 * time.Millisecond)
 		if payload != nil {
 			allOutput += string(payload)
-			if strings.Contains(allOutput, marker) {
+			if strings.Contains(stripANSI(allOutput), marker) {
 				found = true
 			}
 		}
@@ -504,14 +512,14 @@ func TestServeRW(t *testing.T) {
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("did not receive terminal output via ServeRW, got: %q", allOutput)
+			t.Fatalf("did not receive terminal output via ServeRW, got: %q", stripANSI(allOutput))
 		default:
 		}
 		payload := recvClient(500 * time.Millisecond)
 		if payload != nil {
 			allOutput += string(payload)
 		}
-		if strings.Contains(allOutput, "HELLO_RW") {
+		if strings.Contains(stripANSI(allOutput), "HELLO_RW") {
 			break
 		}
 		sendClient(nil)
@@ -625,14 +633,14 @@ func TestServeRW(t *testing.T) {
 	for {
 		select {
 		case <-deadline2:
-			t.Fatalf("did not receive terminal output, got: %q", allOutput2)
+			t.Fatalf("did not receive terminal output, got: %q", stripANSI(allOutput2))
 		default:
 		}
 		payload := recvClient2(500 * time.Millisecond)
 		if payload != nil {
 			allOutput2 += string(payload)
 		}
-		if strings.Contains(allOutput2, "OUTPUT_OK") {
+		if strings.Contains(stripANSI(allOutput2), "OUTPUT_OK") {
 			break
 		}
 		sendClient2(nil)

@@ -1,7 +1,13 @@
 package mosh
 
 import (
+	"image/color"
 	"strconv"
+	"unicode/utf8"
+
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
 )
 
 // Framebuffer represents a terminal screen state for mosh SSP.
@@ -359,5 +365,79 @@ func encodeRune(buf []byte, r rune) int {
 		buf[2] = byte(0x80 | ((r >> 6) & 0x3f))
 		buf[3] = byte(0x80 | (r & 0x3f))
 		return 4
+	}
+}
+
+// SnapshotEmulator captures the VT emulator state into a Framebuffer.
+func SnapshotEmulator(emu *vt.Emulator, cursorVisible bool) *Framebuffer {
+	w := emu.Width()
+	h := emu.Height()
+	fb := NewFramebuffer(w, h)
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := emu.CellAt(x, y)
+			if c == nil {
+				continue
+			}
+			cell := &fb.Cells[y*w+x]
+
+			// Content → first rune.
+			if c.Content == "" || c.Content == " " {
+				cell.Rune = ' '
+			} else {
+				r, _ := utf8.DecodeRuneInString(c.Content)
+				if r == utf8.RuneError {
+					cell.Rune = ' '
+				} else {
+					cell.Rune = r
+				}
+			}
+
+			cell.Width = c.Width
+			if cell.Width == 0 && cell.Rune == ' ' {
+				// Continuation cell.
+				cell.Width = 0
+			}
+
+			// Attributes.
+			cell.Attr.Bold = c.Style.Attrs&uv.AttrBold != 0
+			cell.Attr.Dim = c.Style.Attrs&uv.AttrFaint != 0
+			cell.Attr.Italic = c.Style.Attrs&uv.AttrItalic != 0
+			cell.Attr.Blink = c.Style.Attrs&uv.AttrBlink != 0
+			cell.Attr.Reverse = c.Style.Attrs&uv.AttrReverse != 0
+			cell.Attr.Strike = c.Style.Attrs&uv.AttrStrikethrough != 0
+			cell.Attr.Under = c.Style.Underline != uv.UnderlineNone
+
+			cell.Attr.FG = convertColor(c.Style.Fg)
+			cell.Attr.BG = convertColor(c.Style.Bg)
+		}
+	}
+
+	pos := emu.CursorPosition()
+	fb.CurX = pos.X
+	fb.CurY = pos.Y
+	fb.CurVis = cursorVisible
+
+	return fb
+}
+
+// convertColor converts a color.Color from the VT emulator to our Color type.
+func convertColor(c color.Color) Color {
+	if c == nil {
+		return Color{Type: ColorDefault}
+	}
+	switch v := c.(type) {
+	case ansi.BasicColor:
+		return Color{Type: ColorIndex, Value: uint32(v)}
+	case ansi.IndexedColor:
+		return Color{Type: ColorIndex, Value: uint32(v)}
+	case ansi.TrueColor:
+		return Color{Type: ColorRGB, Value: uint32(v)}
+	case color.RGBA:
+		return Color{Type: ColorRGB, Value: uint32(v.R)<<16 | uint32(v.G)<<8 | uint32(v.B)}
+	default:
+		r, g, b, _ := c.RGBA()
+		return Color{Type: ColorRGB, Value: uint32(r>>8)<<16 | uint32(g>>8)<<8 | uint32(b>>8)}
 	}
 }

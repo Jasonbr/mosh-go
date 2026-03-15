@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 )
 
@@ -27,8 +29,8 @@ const (
 	// Maximum payload per UDP datagram.
 	maxPayload = 16384
 
-	// Heartbeat / tick interval for the SSP send loop.
-	tickInterval = 20 * time.Millisecond
+	// Tick interval matches mosh's SEND_MINDELAY (8ms) for keystroke batching.
+	tickInterval = 8 * time.Millisecond
 
 	// Server gives up waiting for client after this.
 	associationTimeout = 60 * time.Second
@@ -58,6 +60,12 @@ type Server struct {
 
 	// Transport handles SSP sequencing, fragmentation, and crypto.
 	transport *Transport
+
+	// VT emulator and framebuffer state for CUP-based diffing.
+	emu        *vt.Emulator
+	baseFB     *Framebuffer // what client has (last-acked)
+	sentFB     *Framebuffer // what we last sent (pending ack)
+	curVisible atomic.Bool
 
 	// Remote client address — set on first received datagram.
 	mu         sync.Mutex
@@ -154,6 +162,13 @@ func (s *Server) Serve() error {
 		Cols: uint16(s.cols),
 	})
 
+	s.emu = vt.NewEmulator(s.cols, s.rows)
+	s.curVisible.Store(true)
+	s.emu.SetCallbacks(vt.Callbacks{
+		CursorVisibility: func(visible bool) { s.curVisible.Store(visible) },
+	})
+	s.baseFB = NewFramebuffer(s.cols, s.rows)
+
 	var wg sync.WaitGroup
 	wg.Add(3)
 
@@ -195,6 +210,13 @@ func (s *Server) Done() <-chan struct{} {
 // and a resize callback. When rw is closed or reaches EOF, the server shuts down.
 func (s *Server) ServeRW(rw io.ReadWriteCloser, resize func(cols, rows uint16)) error {
 	close(s.started)
+
+	s.emu = vt.NewEmulator(s.cols, s.rows)
+	s.curVisible.Store(true)
+	s.emu.SetCallbacks(vt.Callbacks{
+		CursorVisibility: func(visible bool) { s.curVisible.Store(visible) },
+	})
+	s.baseFB = NewFramebuffer(s.cols, s.rows)
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -265,7 +287,7 @@ func (s *Server) mainLoopRW(rw io.Writer, resize func(cols, rows uint16), ioOutp
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 
-	var pending []byte
+	dirty := false
 
 	for {
 		select {
@@ -276,7 +298,8 @@ func (s *Server) mainLoopRW(rw io.Writer, resize func(cols, rows uint16), ioOutp
 			if !ok {
 				return
 			}
-			pending = append(pending, data...)
+			s.emu.Write(data)
+			dirty = true
 
 		case ui := <-userInput:
 			if len(ui.Keys) > 0 {
@@ -290,18 +313,29 @@ func (s *Server) mainLoopRW(rw io.Writer, resize func(cols, rows uint16), ioOutp
 				if resize != nil {
 					resize(uint16(ui.Width), uint16(ui.Height))
 				}
+				s.emu.Resize(int(ui.Width), int(ui.Height))
+				s.baseFB = NewFramebuffer(int(ui.Width), int(ui.Height))
+				s.sentFB = nil
+				dirty = true
 			}
 
 		case <-ticker.C:
-			if len(pending) > 0 {
-				hi := HostInstruction{
-					Hoststring: pending,
-					EchoAckNum: -1,
-				}
-				diff := marshalHostMessage([]HostInstruction{hi})
-				s.transport.SetPending(diff)
-				pending = nil
+			if s.sentFB != nil && s.transport.AckedByRemote() >= s.transport.SentNum() {
+				s.baseFB = s.sentFB
+				s.sentFB = nil
 			}
+
+			if dirty {
+				currentFB := SnapshotEmulator(s.emu, s.curVisible.Load())
+				diffBytes := currentFB.Diff(s.baseFB)
+				if len(diffBytes) > 0 {
+					hi := HostInstruction{Hoststring: diffBytes, EchoAckNum: -1}
+					s.transport.SetPending(marshalHostMessage([]HostInstruction{hi}))
+					s.sentFB = currentFB
+				}
+				dirty = false
+			}
+
 			datagrams := s.transport.Tick()
 			s.sendDatagrams(datagrams)
 		}
@@ -331,8 +365,9 @@ func (s *Server) Close() {
 	}
 }
 
-// mainLoop is the SSP event loop. It maintains the terminal framebuffer,
-// processes user input, diffs the screen, and drives the transport.
+// mainLoop is the SSP event loop. It feeds PTY output to a VT emulator,
+// snapshots the framebuffer, diffs against the last-acked state, and
+// sends CUP-based updates via the transport.
 func (s *Server) mainLoop(ptyOutput <-chan []byte, userInput <-chan UserInstruction) {
 	// Wait for client to connect before processing.
 	for {
@@ -349,14 +384,10 @@ func (s *Server) mainLoop(ptyOutput <-chan []byte, userInput <-chan UserInstruct
 		}
 	}
 
-	// Terminal state: we maintain a simple passthrough buffer.
-	// PTY output is accumulated and sent as HostBytes diffs.
-	// For full mosh compatibility, the diff is the raw terminal output
-	// wrapped in the HostMessage protobuf.
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 
-	var pending []byte
+	dirty := false
 
 	for {
 		select {
@@ -367,14 +398,13 @@ func (s *Server) mainLoop(ptyOutput <-chan []byte, userInput <-chan UserInstruct
 			if !ok {
 				return
 			}
-			pending = append(pending, data...)
+			s.emu.Write(data)
+			dirty = true
 
 		case ui := <-userInput:
-			// Handle keystrokes.
 			if len(ui.Keys) > 0 {
 				s.ptmx.Write(ui.Keys)
 			}
-			// Handle resize.
 			if ui.Width > 0 && ui.Height > 0 {
 				s.mu.Lock()
 				s.cols = int(ui.Width)
@@ -384,20 +414,28 @@ func (s *Server) mainLoop(ptyOutput <-chan []byte, userInput <-chan UserInstruct
 					Cols: uint16(ui.Width),
 					Rows: uint16(ui.Height),
 				})
+				s.emu.Resize(int(ui.Width), int(ui.Height))
+				s.baseFB = NewFramebuffer(int(ui.Width), int(ui.Height))
+				s.sentFB = nil
+				dirty = true
 			}
 
 		case <-ticker.C:
-			// Build diff and send via transport.
-			if len(pending) > 0 {
-				hi := HostInstruction{
-					Hoststring: pending,
-					EchoAckNum: -1,
-				}
-				diff := marshalHostMessage([]HostInstruction{hi})
+			// Advance base when client acks all pending.
+			if s.sentFB != nil && s.transport.AckedByRemote() >= s.transport.SentNum() {
+				s.baseFB = s.sentFB
+				s.sentFB = nil
+			}
 
-				// Wrap in TransportInstruction via transport.
-				s.transport.SetPending(diff)
-				pending = nil
+			if dirty {
+				currentFB := SnapshotEmulator(s.emu, s.curVisible.Load())
+				diffBytes := currentFB.Diff(s.baseFB)
+				if len(diffBytes) > 0 {
+					hi := HostInstruction{Hoststring: diffBytes, EchoAckNum: -1}
+					s.transport.SetPending(marshalHostMessage([]HostInstruction{hi}))
+					s.sentFB = currentFB
+				}
+				dirty = false
 			}
 
 			datagrams := s.transport.Tick()

@@ -3,12 +3,19 @@ package mosh
 import (
 	"io"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+var clientAnsiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+
+func clientStripANSI(s string) string {
+	return clientAnsiRe.ReplaceAllString(s, "")
+}
 
 // TestClientServerE2E tests the Go client against the Go server.
 func TestClientServerE2E(t *testing.T) {
@@ -48,13 +55,13 @@ func TestClientServerE2E(t *testing.T) {
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("marker not echoed. Got: %q", allOutput)
+			t.Fatalf("marker not echoed. Got: %q", clientStripANSI(allOutput))
 		default:
 		}
 		out := client.Recv(500 * time.Millisecond)
 		if out != nil {
 			allOutput += string(out)
-			if strings.Contains(allOutput, marker) {
+			if strings.Contains(clientStripANSI(allOutput), marker) {
 				t.Log("Go client → Go server E2E passed")
 				return
 			}
@@ -103,7 +110,8 @@ func TestClientResize(t *testing.T) {
 		out := client.Recv(500 * time.Millisecond)
 		if out != nil {
 			allOutput += string(out)
-			if strings.Contains(allOutput, "132") && strings.Contains(allOutput, "43") {
+			stripped := clientStripANSI(allOutput)
+			if strings.Contains(stripped, "132") && strings.Contains(stripped, "43") {
 				t.Log("Go client resize verified: 132x43")
 				return
 			}
@@ -165,7 +173,7 @@ func TestClientServeRW(t *testing.T) {
 		out := client.Recv(500 * time.Millisecond)
 		if out != nil {
 			allOutput += string(out)
-			if strings.Contains(allOutput, "hello from latch") {
+			if strings.Contains(clientStripANSI(allOutput), "hello from latch") {
 				break
 			}
 		}
@@ -193,6 +201,14 @@ func TestClientServeRW(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for keystrokes on pipe")
 	}
+
+	// Drain any extra data from the pipe (cumulative diffs may resend keystrokes).
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			inR.Read(buf)
+		}
+	}()
 
 	// Resize.
 	client.Resize(200, 50)
@@ -284,8 +300,63 @@ func TestClientAgainstRealMoshServer(t *testing.T) {
 		recv := client.Recv(500 * time.Millisecond)
 		if recv != nil {
 			allOutput += string(recv)
-			if strings.Contains(allOutput, marker) {
+			if strings.Contains(clientStripANSI(allOutput), marker) {
 				t.Log("Go client → real mosh-server E2E passed")
+				return
+			}
+		}
+	}
+}
+
+// TestFastTypingNoDuplication verifies that rapid keystrokes don't cause
+// character doubling due to overlapping diffs from the same base.
+func TestFastTypingNoDuplication(t *testing.T) {
+	srv, err := NewServer("/bin/sh", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve()
+	defer srv.Close()
+	<-srv.started
+
+	client, err := Dial("127.0.0.1", srv.Port(), srv.KeyBase64())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	// Wait for shell prompt.
+	for i := 0; i < 40; i++ {
+		if out := client.Recv(500 * time.Millisecond); len(out) > 0 {
+			break
+		}
+	}
+
+	// Send "echo TESTMARKER\n" as rapid individual keystrokes with no delay.
+	cmd := "echo TESTMARKER\n"
+	for _, ch := range cmd {
+		client.Send([]byte{byte(ch)})
+	}
+
+	// Collect output until we see TESTMARKER in the echo output.
+	var allOutput string
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("marker not echoed. Got: %q", clientStripANSI(allOutput))
+		default:
+		}
+		out := client.Recv(500 * time.Millisecond)
+		if out != nil {
+			allOutput += string(out)
+			stripped := clientStripANSI(allOutput)
+			if strings.Contains(stripped, "TESTMARKER") {
+				// Check that TESTMARKER appears but TTEESSTTMMAARRKKEERR does not.
+				if strings.Contains(stripped, "TTEESSTTMMAARRKKEERR") {
+					t.Fatalf("character doubling detected: %q", stripped)
+				}
+				t.Log("fast typing test passed: no character duplication")
 				return
 			}
 		}
