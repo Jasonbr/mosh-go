@@ -96,8 +96,8 @@ func (c *wtConn) startReader() {
 		case c.incoming <- buf:
 		default:
 		}
-		// Chain next read.
-		readNext.Invoke()
+		// Defer next read to next event loop tick so Go goroutines can process.
+		js.Global().Call("setTimeout", readNext, 0)
 		return nil
 	})
 
