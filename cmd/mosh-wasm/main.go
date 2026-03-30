@@ -91,6 +91,7 @@ func (s *session) jsObject() js.Value {
 		}
 		data := args[0].String()
 		s.client.Send([]byte(data))
+		s.client.Tick()
 		return nil
 	}))
 
@@ -101,10 +102,11 @@ func (s *session) jsObject() js.Value {
 		cols := args[0].Int()
 		rows := args[1].Int()
 		s.client.Resize(uint16(cols), uint16(rows))
+		s.client.Tick()
 		return nil
 	}))
 
-	// tick() — flush pending datagrams. Called by JS setInterval.
+	// tick() — send keepalive. Called by JS setInterval at a slow rate.
 	obj.Set("tick", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		s.client.Tick()
 		return nil
