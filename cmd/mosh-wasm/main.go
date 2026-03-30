@@ -91,8 +91,6 @@ func (s *session) jsObject() js.Value {
 		}
 		data := args[0].String()
 		s.client.Send([]byte(data))
-		// Tick immediately so keystrokes go out without waiting for the interval.
-		s.client.Tick()
 		return nil
 	}))
 
@@ -103,7 +101,6 @@ func (s *session) jsObject() js.Value {
 		cols := args[0].Int()
 		rows := args[1].Int()
 		s.client.Resize(uint16(cols), uint16(rows))
-		s.client.Tick()
 		return nil
 	}))
 
