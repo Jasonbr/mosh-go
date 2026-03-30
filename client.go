@@ -12,7 +12,7 @@ import (
 // Client is a mosh client. It connects to a mosh server over UDP,
 // handles the SSP transport, and provides send/recv for terminal I/O.
 type Client struct {
-	conn      *net.UDPConn
+	conn      Conn
 	transport *Transport
 	ocb       *OCB
 
@@ -32,8 +32,8 @@ type Client struct {
 	wg   sync.WaitGroup
 }
 
-// Dial connects to a mosh server. The key is the base64-encoded mosh key
-// (with or without padding).
+// Dial connects to a mosh server over UDP. The key is the base64-encoded
+// mosh key (with or without padding).
 func Dial(host string, port int, key string) (*Client, error) {
 	// Pad key for base64 if needed.
 	for len(key)%4 != 0 {
@@ -57,6 +57,12 @@ func Dial(host string, port int, key string) (*Client, error) {
 		return nil, err
 	}
 
+	return DialConn(conn, ocb)
+}
+
+// DialConn creates a mosh client over an existing datagram connection.
+// Use this with WebTransport or other non-UDP transports.
+func DialConn(conn Conn, ocb *OCB) (*Client, error) {
 	c := &Client{
 		conn:             conn,
 		transport:        NewTransport(ocb, false),

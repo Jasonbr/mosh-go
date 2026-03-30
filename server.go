@@ -1,3 +1,5 @@
+//go:build !js
+
 package mosh
 
 import (
@@ -18,20 +20,6 @@ import (
 )
 
 const (
-	// Direction bits in the 64-bit nonce header.
-	dirToServer = uint64(0)          // client → server
-	dirToClient = uint64(1) << 63    // server → client
-	seqMask     = ^(uint64(1) << 63) // lower 63 bits
-
-	// Minimum wire datagram: 8 (nonce) + 16 (tag) = 24 bytes.
-	minDatagram = 24
-
-	// Maximum payload per UDP datagram.
-	maxPayload = 16384
-
-	// Tick interval matches mosh's SEND_MINDELAY (8ms) for keystroke batching.
-	tickInterval = 8 * time.Millisecond
-
 	// Server gives up waiting for client after this.
 	associationTimeout = 60 * time.Second
 
