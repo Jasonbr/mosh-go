@@ -12,6 +12,7 @@ import (
 // wtConn wraps a browser WebTransport connection as a mosh.Conn.
 type wtConn struct {
 	transport js.Value
+	writer    js.Value // persistent writable stream writer
 	incoming  chan []byte
 	done      chan struct{}
 	once      sync.Once
@@ -56,8 +57,11 @@ func dialWebTransport(url string) (*wtConn, error) {
 	onReady.Release()
 	onFail.Release()
 
+	writer := wt.Get("datagrams").Get("writable").Call("getWriter")
+
 	c := &wtConn{
 		transport: wt,
+		writer:    writer,
 		incoming:  make(chan []byte, 256),
 		done:      make(chan struct{}),
 	}
@@ -132,11 +136,9 @@ func (c *wtConn) Read(b []byte) (int, error) {
 }
 
 func (c *wtConn) Write(b []byte) (int, error) {
-	writer := c.transport.Get("datagrams").Get("writable").Call("getWriter")
 	arr := js.Global().Get("Uint8Array").New(len(b))
 	js.CopyBytesToJS(arr, b)
-	writer.Call("write", arr)
-	writer.Call("releaseLock")
+	c.writer.Call("write", arr)
 	return len(b), nil
 }
 
