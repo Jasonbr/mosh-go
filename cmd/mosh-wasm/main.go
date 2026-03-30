@@ -72,7 +72,8 @@ func newSession(url, key string) (*session, error) {
 		return nil, err
 	}
 
-	client, err := mosh.DialConn(conn, ocb)
+	// Use DialConnManual — no internal sendLoop. JS drives Tick() via setInterval.
+	client, err := mosh.DialConnManual(conn, ocb)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -90,6 +91,8 @@ func (s *session) jsObject() js.Value {
 		}
 		data := args[0].String()
 		s.client.Send([]byte(data))
+		// Tick immediately so keystrokes go out without waiting for the interval.
+		s.client.Tick()
 		return nil
 	}))
 
@@ -100,6 +103,13 @@ func (s *session) jsObject() js.Value {
 		cols := args[0].Int()
 		rows := args[1].Int()
 		s.client.Resize(uint16(cols), uint16(rows))
+		s.client.Tick()
+		return nil
+	}))
+
+	// tick() — flush pending datagrams. Called by JS setInterval.
+	obj.Set("tick", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		s.client.Tick()
 		return nil
 	}))
 

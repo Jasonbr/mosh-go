@@ -83,6 +83,29 @@ func DialConn(conn Conn, ocb *OCB) (*Client, error) {
 	return c, nil
 }
 
+// DialConnManual creates a mosh client without an internal sendLoop.
+// The caller must call Tick() periodically (e.g., every 8-16ms) to flush
+// outgoing datagrams. Use this in WASM where Go timers are unreliable.
+func DialConnManual(conn Conn, ocb *OCB) (*Client, error) {
+	c := &Client{
+		conn:             conn,
+		transport:        NewTransport(ocb, false),
+		ocb:              ocb,
+		outputC:          make(chan struct{}, 1),
+		done:             make(chan struct{}),
+		sentActionCounts: make(map[uint64]int),
+	}
+
+	c.wg.Add(1)
+	go c.recvLoop()
+
+	// Send initial keepalive to associate with the server.
+	c.transport.ForceNextSend()
+	c.tick()
+
+	return c, nil
+}
+
 // Send sends keystrokes to the server.
 func (c *Client) Send(keys []byte) {
 	c.actionsMu.Lock()
@@ -145,6 +168,13 @@ func (c *Client) Close() {
 // (e.g., capability negotiation).
 func (c *Client) Transport() *Transport {
 	return c.transport
+}
+
+// Tick flushes pending actions as mosh datagrams. Call this periodically
+// from an external timer (e.g., JS setInterval in WASM) when the internal
+// sendLoop is not used.
+func (c *Client) Tick() {
+	c.tick()
 }
 
 func (c *Client) tick() {
