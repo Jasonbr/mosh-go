@@ -84,19 +84,12 @@ func newSession(url, key string) (*session, error) {
 func (s *session) jsObject() js.Value {
 	obj := js.Global().Get("Object").New()
 
-	// Tick immediately when idle (no unacked states). When busy (ack
-	// pending), queue keystrokes and let the interval flush them.
-	// This gives instant feel for the first key while preventing
-	// cumulative state duplication during rapid typing.
 	obj.Set("send", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if len(args) < 1 {
 			return nil
 		}
 		s.client.Send([]byte(args[0].String()))
-		t := s.client.Transport()
-		if t.AckedByRemote() >= t.SentNum() {
-			s.client.Tick()
-		}
+		s.client.Tick()
 		return nil
 	}))
 
@@ -105,14 +98,11 @@ func (s *session) jsObject() js.Value {
 			return nil
 		}
 		s.client.Resize(uint16(args[0].Int()), uint16(args[1].Int()))
-		t := s.client.Transport()
-		if t.AckedByRemote() >= t.SentNum() {
-			s.client.Tick()
-		}
+		s.client.Tick()
 		return nil
 	}))
 
-	// tick() — send keepalive. Called by JS setInterval at a slow rate.
+	// tick() — flush pending keystrokes + keepalive/retransmit.
 	obj.Set("tick", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		s.client.Tick()
 		return nil

@@ -178,9 +178,15 @@ func (c *Client) Tick() {
 }
 
 func (c *Client) tick() {
-	// Batch: compute diff from accumulated actions.
+	// Only create a new state when the server has acked the previous one.
+	// This matches the Dart mosh client's behavior: at most one unacked
+	// state in flight. Keystrokes accumulate until the ack arrives, then
+	// the next tick sends them all as a single new state.
+	// Without this check, SetPending resets diffSent, causing Tick() to
+	// increment sentNum for the same cumulative payload — the server
+	// applies duplicate keystrokes.
 	c.actionsMu.Lock()
-	if c.dirty {
+	if c.dirty && c.transport.AckedByRemote() >= c.transport.SentNum() {
 		c.dirty = false
 		c.processAcksLocked()
 		newActions := c.actions[c.ackedActionCount:]
