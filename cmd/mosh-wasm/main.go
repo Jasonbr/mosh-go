@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"syscall/js"
+	"time"
 
 	mosh "github.com/unixshells/mosh-go"
 )
@@ -16,23 +17,23 @@ func main() {
 	select {} // keep alive
 }
 
-// moshConnect(url, key) → Promise<MoshSession>
-// url: WebTransport URL (e.g., "https://relay.example.com/mosh/user/device")
-// key: base64-encoded mosh key
+// moshConnect(url, key, cols, rows) → Promise<MoshSession>
 func moshConnect(this js.Value, args []js.Value) interface{} {
-	if len(args) < 2 {
-		return reject("moshConnect requires (url, key)")
+	if len(args) < 4 {
+		return reject("moshConnect requires (url, key, cols, rows)")
 	}
 
 	url := args[0].String()
 	key := args[1].String()
+	cols := args[2].Int()
+	rows := args[3].Int()
 
 	handler := js.FuncOf(func(this js.Value, pargs []js.Value) interface{} {
 		resolve := pargs[0]
 		rejectFn := pargs[1]
 
 		go func() {
-			session, err := newSession(url, key)
+			session, err := newSession(url, key, cols, rows)
 			if err != nil {
 				rejectFn.Invoke(err.Error())
 				return
@@ -47,13 +48,14 @@ func moshConnect(this js.Value, args []js.Value) interface{} {
 }
 
 type session struct {
-	client *mosh.Client
-	conn   *wtConn
-	mu     sync.Mutex
-	closed bool
+	client  *mosh.Client
+	conn    *wtConn
+	tracker *stateTracker
+	mu      sync.Mutex
+	closed  bool
 }
 
-func newSession(url, key string) (*session, error) {
+func newSession(url, key string, cols, rows int) (*session, error) {
 	for len(key)%4 != 0 {
 		key += "="
 	}
@@ -71,14 +73,22 @@ func newSession(url, key string) (*session, error) {
 		return nil, err
 	}
 
-	// Use DialConnManual — no internal sendLoop. JS drives Tick() via setInterval.
 	client, err := mosh.DialConnManual(conn, ocb)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
 
-	return &session{client: client, conn: conn}, nil
+	s := &session{
+		client:  client,
+		conn:    conn,
+		tracker: newStateTracker(cols, rows),
+	}
+
+	// Background goroutine: read from mosh client, feed to state tracker.
+	go s.recvLoop()
+
+	return s, nil
 }
 
 func (s *session) jsObject() js.Value {
@@ -97,7 +107,10 @@ func (s *session) jsObject() js.Value {
 		if len(args) < 2 {
 			return nil
 		}
-		s.client.Resize(uint16(args[0].Int()), uint16(args[1].Int()))
+		cols := args[0].Int()
+		rows := args[1].Int()
+		s.client.Resize(uint16(cols), uint16(rows))
+		s.tracker.resize(cols, rows)
 		s.client.Tick()
 		return nil
 	}))
@@ -108,11 +121,9 @@ func (s *session) jsObject() js.Value {
 		return nil
 	}))
 
-	// poll() — check for output. Called by JS setInterval.
-	// Returns string if output available, null otherwise.
-	// Using JS-driven polling avoids Go goroutine scheduler starvation.
+	// poll() — returns pre-diffed ANSI output from the state tracker.
 	obj.Set("poll", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		out := s.client.Recv(0)
+		out := s.tracker.poll()
 		if out == nil {
 			return js.Null()
 		}
@@ -128,6 +139,27 @@ func (s *session) jsObject() js.Value {
 	}))
 
 	return obj
+}
+
+// recvLoop reads raw diffs from the mosh client and feeds them
+// to the state tracker for framebuffer-based processing.
+func (s *session) recvLoop() {
+	for {
+		out := s.client.Recv(60 * time.Second)
+		if out == nil {
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if closed {
+				return
+			}
+			continue
+		}
+		t := s.client.Transport()
+		oldNum := t.LastRecvOldNum()
+		newNum := t.LastRecvNewNum()
+		s.tracker.applyDiff(out, oldNum, newNum)
+	}
 }
 
 func reject(msg string) js.Value {

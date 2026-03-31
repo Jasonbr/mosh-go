@@ -34,10 +34,12 @@ type Transport struct {
 	pendingDataAck bool   // true = send ack ASAP (received data, not just ack)
 
 	// Incoming state — list of received state nums for old_num validation.
-	receivedNums []uint64 // ordered list of state nums we have
-	ackNum       uint64   // latest received state num
-	sentAckNum   uint64   // last ackNum we actually sent on wire
-	throwawayNum uint64   // oldest state we still hold
+	receivedNums   []uint64 // ordered list of state nums we have
+	ackNum         uint64   // latest received state num
+	sentAckNum     uint64   // last ackNum we actually sent on wire
+	throwawayNum   uint64   // oldest state we still hold
+	lastRecvOldNum uint64   // oldNum from most recently received diff
+	lastRecvNewNum uint64   // newNum from most recently received diff
 
 	// Sequence counter for the crypto layer (independent of SSP state numbering).
 	seqOut      uint64
@@ -326,6 +328,10 @@ func (t *Transport) Recv(wire []byte) []byte {
 		t.receivedNums = filtered
 	}
 
+	// Track oldNum/newNum for state management.
+	t.lastRecvOldNum = ti.OldNum
+	t.lastRecvNewNum = ti.NewNum
+
 	// Add new state.
 	t.receivedNums = append(t.receivedNums, ti.NewNum)
 
@@ -357,6 +363,20 @@ func (t *Transport) SentNum() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sentNum
+}
+
+// LastRecvOldNum returns the oldNum from the most recently received diff.
+func (t *Transport) LastRecvOldNum() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastRecvOldNum
+}
+
+// LastRecvNewNum returns the newNum from the most recently received diff.
+func (t *Transport) LastRecvNewNum() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastRecvNewNum
 }
 
 // LastRecv returns the time of the last received datagram.
