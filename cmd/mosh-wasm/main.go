@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync"
 	"syscall/js"
-	"time"
 
 	mosh "github.com/unixshells/mosh-go"
 )
@@ -119,28 +118,15 @@ func (s *session) jsObject() js.Value {
 		return nil
 	}))
 
-	// recv(callback) — calls callback(string) whenever output is available
-	obj.Set("recv", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		if len(args) < 1 {
-			return nil
+	// poll() — check for output. Called by JS setInterval.
+	// Returns string if output available, null otherwise.
+	// Using JS-driven polling avoids Go goroutine scheduler starvation.
+	obj.Set("poll", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		out := s.client.Recv(0)
+		if out == nil {
+			return js.Null()
 		}
-		cb := args[0]
-		go func() {
-			for {
-				out := s.client.Recv(60 * time.Second)
-				if out == nil {
-					s.mu.Lock()
-					closed := s.closed
-					s.mu.Unlock()
-					if closed {
-						return
-					}
-					continue
-				}
-				cb.Invoke(string(out))
-			}
-		}()
-		return nil
+		return string(out)
 	}))
 
 	obj.Set("close", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
