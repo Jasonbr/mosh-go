@@ -172,11 +172,11 @@ func (fb *Framebuffer) fullRedraw() []byte {
 			buf = append(buf, "\r\n"...)
 		}
 		rowOff := y * fb.W
-		// Track trailing spaces to avoid sending them.
+		// Track trailing default-attr spaces to avoid sending them.
 		lastNonSpace := -1
 		for x := fb.W - 1; x >= 0; x-- {
 			c := &fb.Cells[rowOff+x]
-			if c.Rune != ' ' || c.Rune == 0 || c.Attr != (Attr{}) {
+			if (c.Rune != ' ' && c.Rune != 0) || c.Attr != (Attr{}) {
 				lastNonSpace = x
 				break
 			}
