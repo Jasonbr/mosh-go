@@ -258,6 +258,9 @@ func (s *Server) readIO(r io.Reader, out chan<- []byte) {
 }
 
 func (s *Server) mainLoopRW(rw io.Writer, resize func(cols, rows uint16), ioOutput <-chan []byte, userInput <-chan UserInstruction) {
+	// Wait for the first client datagram. If no client connects within
+	// 60 seconds, this was a failed setup — shut down to release resources.
+	deadline := time.After(associationTimeout)
 	for {
 		s.mu.Lock()
 		addr := s.clientAddr
@@ -267,6 +270,9 @@ func (s *Server) mainLoopRW(rw io.Writer, resize func(cols, rows uint16), ioOutp
 		}
 		select {
 		case <-s.done:
+			return
+		case <-deadline:
+			close(s.done)
 			return
 		case <-time.After(100 * time.Millisecond):
 		}
@@ -357,7 +363,9 @@ func (s *Server) Close() {
 // snapshots the framebuffer, diffs against the last-acked state, and
 // sends CUP-based updates via the transport.
 func (s *Server) mainLoop(ptyOutput <-chan []byte, userInput <-chan UserInstruction) {
-	// Wait for client to connect before processing.
+	// Wait for the first client datagram. If no client connects within
+	// 60 seconds, this was a failed setup — shut down to release resources.
+	deadline := time.After(associationTimeout)
 	for {
 		s.mu.Lock()
 		addr := s.clientAddr
@@ -367,6 +375,9 @@ func (s *Server) mainLoop(ptyOutput <-chan []byte, userInput <-chan UserInstruct
 		}
 		select {
 		case <-s.done:
+			return
+		case <-deadline:
+			close(s.done)
 			return
 		case <-time.After(100 * time.Millisecond):
 		}
