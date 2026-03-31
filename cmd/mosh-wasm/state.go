@@ -60,11 +60,13 @@ func (st *stateTracker) applyDiff(diff []byte, oldNum, newNum uint64) {
 	// Need the base state to apply the diff.
 	base, ok := st.states[oldNum]
 	if !ok {
-		return
-	}
-
-	// Restore shadow to base state if needed.
-	if st.shadowState != oldNum {
+		// After a resize we have no states. Start fresh with a
+		// clean emulator so the first post-resize diff works.
+		st.shadow = vt.NewEmulator(st.cols, st.rows)
+		st.shadowState = oldNum
+		base = mosh.SnapshotEmulator(st.shadow, true)
+		st.states[oldNum] = base
+	} else if st.shadowState != oldNum {
 		st.shadow = vt.NewEmulator(st.cols, st.rows)
 		// Write the base framebuffer as ANSI to restore state.
 		if base != nil {
