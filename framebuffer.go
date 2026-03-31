@@ -15,8 +15,10 @@ const (
 	attrFaint         = 1 << 1
 	attrItalic        = 1 << 2
 	attrBlink         = 1 << 3
-	attrReverse       = 1 << 4
-	attrStrikethrough = 1 << 5
+	attrRapidBlink    = 1 << 4
+	attrReverse       = 1 << 5
+	attrConceal       = 1 << 6
+	attrStrikethrough = 1 << 7
 )
 
 // Framebuffer represents a terminal screen state for mosh SSP.
