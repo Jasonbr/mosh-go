@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/charmbracelet/x/vt"
+	"github.com/unixshells/vt-go"
 	"github.com/creack/pty"
 )
 

@@ -1,5 +1,3 @@
-//go:build !js
-
 package mosh
 
 import (
@@ -7,9 +5,18 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/vt"
+	"github.com/unixshells/vt-go"
+)
+
+// Cell attribute bitmasks (matching charmbracelet/ultraviolet values).
+const (
+	attrBold          = 1 << 0
+	attrFaint         = 1 << 1
+	attrItalic        = 1 << 2
+	attrBlink         = 1 << 3
+	attrReverse       = 1 << 4
+	attrStrikethrough = 1 << 5
 )
 
 // Framebuffer represents a terminal screen state for mosh SSP.
@@ -403,13 +410,13 @@ func SnapshotEmulator(emu *vt.Emulator, cursorVisible bool) *Framebuffer {
 			}
 
 			// Attributes.
-			cell.Attr.Bold = c.Style.Attrs&uv.AttrBold != 0
-			cell.Attr.Dim = c.Style.Attrs&uv.AttrFaint != 0
-			cell.Attr.Italic = c.Style.Attrs&uv.AttrItalic != 0
-			cell.Attr.Blink = c.Style.Attrs&uv.AttrBlink != 0
-			cell.Attr.Reverse = c.Style.Attrs&uv.AttrReverse != 0
-			cell.Attr.Strike = c.Style.Attrs&uv.AttrStrikethrough != 0
-			cell.Attr.Under = c.Style.Underline != uv.UnderlineNone
+			cell.Attr.Bold = c.Style.Attrs&attrBold != 0
+			cell.Attr.Dim = c.Style.Attrs&attrFaint != 0
+			cell.Attr.Italic = c.Style.Attrs&attrItalic != 0
+			cell.Attr.Blink = c.Style.Attrs&attrBlink != 0
+			cell.Attr.Reverse = c.Style.Attrs&attrReverse != 0
+			cell.Attr.Strike = c.Style.Attrs&attrStrikethrough != 0
+			cell.Attr.Under = c.Style.Underline != ansi.UnderlineNone
 
 			cell.Attr.FG = convertColor(c.Style.Fg)
 			cell.Attr.BG = convertColor(c.Style.Bg)

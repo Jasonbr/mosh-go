@@ -3,16 +3,16 @@ module github.com/unixshells/mosh-go
 go 1.26.0
 
 require (
-	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff
 	github.com/charmbracelet/x/ansi v0.11.6
-	github.com/charmbracelet/x/vt v0.0.0-20260305213658-fe36e8c10185
 	github.com/creack/pty v1.1.24
+	github.com/unixshells/vt-go v0.1.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/term v0.41.0
 )
 
 require (
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
