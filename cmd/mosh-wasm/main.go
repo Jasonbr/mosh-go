@@ -73,7 +73,7 @@ func newSession(url, key string, cols, rows int) (*session, error) {
 		return nil, err
 	}
 
-	client, err := mosh.DialConnManual(conn, ocb)
+	client, err := mosh.DialConnRaw(conn, ocb)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -141,12 +141,12 @@ func (s *session) jsObject() js.Value {
 	return obj
 }
 
-// recvLoop reads raw diffs from the mosh client and feeds them
-// to the state tracker for framebuffer-based processing.
+// recvLoop reads raw transport diffs and feeds them to the state
+// tracker for framebuffer-based processing.
 func (s *session) recvLoop() {
 	for {
-		out := s.client.Recv(60 * time.Second)
-		if out == nil {
+		diff := s.client.RecvRaw(1 * time.Second)
+		if diff == nil {
 			s.mu.Lock()
 			closed := s.closed
 			s.mu.Unlock()
@@ -158,7 +158,7 @@ func (s *session) recvLoop() {
 		t := s.client.Transport()
 		oldNum := t.LastRecvOldNum()
 		newNum := t.LastRecvNewNum()
-		s.tracker.applyDiff(out, oldNum, newNum)
+		s.tracker.applyDiff(diff, oldNum, newNum)
 	}
 }
 

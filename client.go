@@ -106,6 +106,48 @@ func DialConnManual(conn Conn, ocb *OCB) (*Client, error) {
 	return c, nil
 }
 
+// DialConnRaw creates a mosh client with no internal goroutines.
+// The caller must call Tick() for sending AND RecvRaw() for receiving.
+// Use this when the caller needs raw transport diffs (e.g., for
+// framebuffer state tracking in the WASM client).
+func DialConnRaw(conn Conn, ocb *OCB) (*Client, error) {
+	c := &Client{
+		conn:             conn,
+		transport:        NewTransport(ocb, false),
+		ocb:              ocb,
+		outputC:          make(chan struct{}, 1),
+		done:             make(chan struct{}),
+		sentActionCounts: make(map[uint64]int),
+	}
+
+	c.transport.ForceNextSend()
+	c.tick()
+
+	return c, nil
+}
+
+// RecvRaw reads one datagram from the connection and processes it
+// through the transport. Returns the raw diff payload, or nil if
+// no complete message was received (timeout, fragment, replay).
+// The caller can use Transport().LastRecvOldNum()/LastRecvNewNum()
+// to get the state numbers for this diff.
+func (c *Client) RecvRaw(timeout time.Duration) []byte {
+	buf := make([]byte, maxPayload+64)
+
+	c.conn.SetReadDeadline(time.Now().Add(timeout))
+	n, err := c.conn.Read(buf)
+	if err != nil {
+		return nil
+	}
+	if n < minDatagram {
+		return nil
+	}
+
+	data := make([]byte, n)
+	copy(data, buf[:n])
+	return c.transport.Recv(data)
+}
+
 // Send sends keystrokes to the server.
 func (c *Client) Send(keys []byte) {
 	c.actionsMu.Lock()
