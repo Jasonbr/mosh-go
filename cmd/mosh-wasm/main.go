@@ -85,28 +85,14 @@ func newSession(url, key string) (*session, error) {
 func (s *session) jsObject() js.Value {
 	obj := js.Global().Get("Object").New()
 
-	// Batch keystrokes: queue actions, flush once per animation frame.
-	// This prevents cumulative state from creating new sequence numbers
-	// for every keystroke, which causes duplicates on high-latency paths.
-	var pendingFlush bool
-	flushFn := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		pendingFlush = false
-		s.client.Tick()
-		return nil
-	})
-	scheduleFlush := func() {
-		if !pendingFlush {
-			pendingFlush = true
-			js.Global().Call("requestAnimationFrame", flushFn)
-		}
-	}
-
+	// Keystrokes are queued via Send(). The JS interval flushes them.
+	// Do NOT tick from send — the WebTransport ack round-trip is ~50ms,
+	// and ticking per-keystroke creates duplicate sequence numbers.
 	obj.Set("send", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if len(args) < 1 {
 			return nil
 		}
 		s.client.Send([]byte(args[0].String()))
-		scheduleFlush()
 		return nil
 	}))
 
@@ -115,7 +101,6 @@ func (s *session) jsObject() js.Value {
 			return nil
 		}
 		s.client.Resize(uint16(args[0].Int()), uint16(args[1].Int()))
-		scheduleFlush()
 		return nil
 	}))
 
