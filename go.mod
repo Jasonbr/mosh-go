@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/creack/pty v1.1.24
-	github.com/unixshells/vt-go v0.1.0
+	github.com/unixshells/vt-go v0.2.0
 	golang.org/x/crypto v0.49.0
 	golang.org/x/term v0.41.0
 )
