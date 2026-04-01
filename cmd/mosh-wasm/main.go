@@ -136,6 +136,23 @@ func (s *session) jsObject() js.Value {
 		return string(out)
 	}))
 
+	// reconnect() — swap WebTransport connection using session token.
+	obj.Set("reconnect", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		handler := js.FuncOf(func(this js.Value, pargs []js.Value) interface{} {
+			resolve := pargs[0]
+			rejectFn := pargs[1]
+			go func() {
+				if err := s.conn.Reconnect(); err != nil {
+					rejectFn.Invoke(err.Error())
+					return
+				}
+				resolve.Invoke(true)
+			}()
+			return nil
+		})
+		return js.Global().Get("Promise").New(handler)
+	}))
+
 	obj.Set("close", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		s.mu.Lock()
 		s.closed = true
