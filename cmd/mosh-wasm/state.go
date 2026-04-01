@@ -61,15 +61,14 @@ func (st *stateTracker) applyDiff(diff []byte, oldNum, newNum, throwawayNum uint
 	// Need the base state to apply the diff.
 	base, ok := st.states[oldNum]
 	if !ok {
-		// After a resize we have no states. Start fresh with a
-		// clean emulator so the first post-resize diff works.
-		st.shadow = vt.NewEmulator(st.cols, st.rows)
+		// Unknown base state. Reset the shadow emulator and start fresh.
+		st.resetShadow()
 		st.shadowState = oldNum
 		base = mosh.SnapshotEmulator(st.shadow, true)
 		st.states[oldNum] = base
 	} else if st.shadowState != oldNum {
-		st.shadow = vt.NewEmulator(st.cols, st.rows)
-		// Write the base framebuffer as ANSI to restore state.
+		// Restore shadow to the base state.
+		st.resetShadow()
 		if base != nil {
 			st.shadow.Write(base.Diff(nil))
 		}
@@ -132,9 +131,16 @@ func (st *stateTracker) resize(cols, rows int) {
 	defer st.mu.Unlock()
 	st.cols = cols
 	st.rows = rows
+	// Must create a new emulator for new dimensions.
 	st.shadow = vt.NewEmulator(cols, rows)
 	st.shadowState = 0
 	st.states = make(map[uint64]*mosh.Framebuffer)
 	st.displayedFB = nil
+}
+
+// resetShadow clears the shadow emulator without reallocating it.
+func (st *stateTracker) resetShadow() {
+	st.shadow.Resize(st.cols, st.rows)
+	st.shadow.Write([]byte("\033[H\033[2J\033[m"))
 }
 
