@@ -95,6 +95,16 @@ Standard mosh clients and servers ignore them (forward-compatible).
 - **Session control** (Host/UserInstruction field 9): list, switch,
   and create latch sessions over the mosh connection.
 
+## WASM build
+
+The mosh client compiles to WebAssembly for use in the web terminal:
+
+```
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -tags osusergo -o mosh.wasm ./cmd/mosh-wasm/
+```
+
+The `-tags osusergo` flag is required to avoid `os/user` CGO issues with `GOOS=js`.
+
 ## Files
 
 - `server.go` -- server, PTY lifecycle, `ServeRW` bridge mode
@@ -104,6 +114,7 @@ Standard mosh clients and servers ignore them (forward-compatible).
 - `fragment.go` -- datagram fragmentation and reassembly
 - `pb.go` -- protobuf encoding (transport, host, user, latch extensions)
 - `framebuffer.go` -- terminal state tracking for diff protocol
+- `predict.go` -- local echo prediction engine (speculative keystroke rendering)
 
 ## Dependencies
 

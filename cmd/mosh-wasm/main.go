@@ -98,9 +98,15 @@ func (s *session) jsObject() js.Value {
 		if len(args) < 1 {
 			return nil
 		}
-		s.client.Send([]byte(args[0].String()))
+		data := []byte(args[0].String())
+		s.client.Send(data)
 		s.client.Tick()
-		return nil
+
+		// Feed input to predictor — returns immediate overlay output.
+		if out := s.tracker.keystroke(data); len(out) > 0 {
+			return string(out)
+		}
+		return js.Null()
 	}))
 
 	obj.Set("resize", js.FuncOf(func(this js.Value, args []js.Value) interface{} {

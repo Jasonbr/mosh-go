@@ -4,6 +4,7 @@ package main
 
 import (
 	"sync"
+	"time"
 
 	mosh "github.com/unixshells/mosh-go"
 	vt "github.com/unixshells/vt-go"
@@ -27,16 +28,20 @@ type stateTracker struct {
 	latestState  uint64
 	displayedFB  *mosh.Framebuffer
 
+	// Prediction engine for local echo.
+	predictor *mosh.Predictor
+
 	// Output buffer: pre-diffed ANSI ready for the terminal.
 	output []byte
 }
 
 func newStateTracker(cols, rows int) *stateTracker {
 	return &stateTracker{
-		shadow: vt.NewEmulator(cols, rows),
-		cols:   cols,
-		rows:   rows,
-		states: make(map[uint64]*mosh.Framebuffer),
+		shadow:    vt.NewEmulator(cols, rows),
+		cols:      cols,
+		rows:      rows,
+		states:    make(map[uint64]*mosh.Framebuffer),
+		predictor: mosh.NewPredictor(),
 	}
 }
 
@@ -102,14 +107,24 @@ func (st *stateTracker) applyDiff(diff []byte, oldNum, newNum, throwawayNum uint
 		}
 	}
 
-	// Display diff: compute ANSI difference between displayed and latest.
+	// Confirm predictions against server state.
 	latest := st.states[st.latestState]
 	if latest != nil {
-		ansi := latest.Diff(st.displayedFB)
+		st.predictor.Confirm(latest)
+		st.predictor.ExpireStale(time.Now())
+
+		// Apply prediction overlay for display.
+		displayFB := latest
+		if st.predictor.Active() {
+			displayFB = st.cloneFB(latest)
+			st.predictor.Overlay(displayFB)
+		}
+
+		ansi := displayFB.Diff(st.displayedFB)
 		if len(ansi) > 0 {
 			st.output = append(st.output, ansi...)
 		}
-		st.displayedFB = latest
+		st.displayedFB = displayFB
 	}
 }
 
@@ -125,6 +140,54 @@ func (st *stateTracker) poll() []byte {
 	return out
 }
 
+// keystroke feeds user input to the predictor and returns any prediction
+// overlay output that should be displayed immediately.
+func (st *stateTracker) keystroke(data []byte) []byte {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	st.predictor.Keystroke(data)
+
+	if !st.predictor.Active() || st.displayedFB == nil {
+		return nil
+	}
+
+	// Overlay predictions onto the current display and diff.
+	overlaid := st.cloneFB(st.displayedFB)
+
+	// First undo previous prediction overlay by using latest server state.
+	var serverFB *mosh.Framebuffer
+	if st.latestState > 0 {
+		serverFB = st.states[st.latestState]
+	}
+	if serverFB == nil {
+		serverFB = st.displayedFB
+	}
+
+	displayFB := st.cloneFB(serverFB)
+	st.predictor.Overlay(displayFB)
+
+	ansi := displayFB.Diff(overlaid)
+	if len(ansi) > 0 {
+		st.displayedFB = displayFB
+	}
+	return ansi
+}
+
+// cloneFB creates a deep copy of a framebuffer.
+func (st *stateTracker) cloneFB(fb *mosh.Framebuffer) *mosh.Framebuffer {
+	clone := &mosh.Framebuffer{
+		W:      fb.W,
+		H:      fb.H,
+		CurX:   fb.CurX,
+		CurY:   fb.CurY,
+		CurVis: fb.CurVis,
+		Cells:  make([]mosh.Cell, len(fb.Cells)),
+	}
+	copy(clone.Cells, fb.Cells)
+	return clone
+}
+
 // resize resets the state tracker for new dimensions.
 func (st *stateTracker) resize(cols, rows int) {
 	st.mu.Lock()
@@ -136,6 +199,7 @@ func (st *stateTracker) resize(cols, rows int) {
 	st.shadowState = 0
 	st.states = make(map[uint64]*mosh.Framebuffer)
 	st.displayedFB = nil
+	st.predictor.Reset()
 }
 
 // resetShadow clears the shadow emulator without reallocating it.
