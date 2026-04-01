@@ -41,7 +41,8 @@ func newStateTracker(cols, rows int) *stateTracker {
 }
 
 // applyDiff processes an incoming server diff using state tracking.
-func (st *stateTracker) applyDiff(diff []byte, oldNum, newNum uint64) {
+// throwawayNum is the server's indication of which states it no longer references.
+func (st *stateTracker) applyDiff(diff []byte, oldNum, newNum, throwawayNum uint64) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
@@ -93,9 +94,13 @@ func (st *stateTracker) applyDiff(diff []byte, oldNum, newNum uint64) {
 		st.latestState = newNum
 	}
 
-	// Bound states list.
-	if len(st.states) > 128 {
-		st.pruneStates()
+	// Prune states the server no longer references.
+	if throwawayNum > 0 {
+		for n := range st.states {
+			if n < throwawayNum {
+				delete(st.states, n)
+			}
+		}
 	}
 
 	// Display diff: compute ANSI difference between displayed and latest.
@@ -133,24 +138,3 @@ func (st *stateTracker) resize(cols, rows int) {
 	st.displayedFB = nil
 }
 
-func (st *stateTracker) pruneStates() {
-	if len(st.states) <= 64 {
-		return
-	}
-	// Keep the 64 most recent states.
-	var nums []uint64
-	for n := range st.states {
-		nums = append(nums, n)
-	}
-	// Simple sort for small lists.
-	for i := range nums {
-		for j := i + 1; j < len(nums); j++ {
-			if nums[j] < nums[i] {
-				nums[i], nums[j] = nums[j], nums[i]
-			}
-		}
-	}
-	for _, n := range nums[:len(nums)-64] {
-		delete(st.states, n)
-	}
-}

@@ -379,6 +379,14 @@ func (t *Transport) LastRecvNewNum() uint64 {
 	return t.lastRecvNewNum
 }
 
+// ThrowawayNum returns the server's throwaway number — states below this
+// are no longer referenced by the server and can be safely pruned.
+func (t *Transport) ThrowawayNum() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.throwawayNum
+}
+
 // LastRecv returns the time of the last received datagram.
 func (t *Transport) LastRecv() time.Time {
 	t.mu.Lock()

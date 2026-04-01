@@ -158,7 +158,8 @@ func (s *session) recvLoop() {
 		t := s.client.Transport()
 		oldNum := t.LastRecvOldNum()
 		newNum := t.LastRecvNewNum()
-		s.tracker.applyDiff(diff, oldNum, newNum)
+		throwawayNum := t.ThrowawayNum()
+		s.tracker.applyDiff(diff, oldNum, newNum, throwawayNum)
 	}
 }
 
