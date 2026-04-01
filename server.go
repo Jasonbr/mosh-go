@@ -150,7 +150,7 @@ func (s *Server) Serve() error {
 		Cols: uint16(s.cols),
 	})
 
-	s.emu = vt.NewEmulatorNoScrollback(s.cols, s.rows)
+	s.emu = vt.NewEmulator(s.cols, s.rows)
 	s.curVisible.Store(true)
 	s.emu.SetCallbacks(vt.Callbacks{
 		CursorVisibility: func(visible bool) { s.curVisible.Store(visible) },
@@ -199,7 +199,7 @@ func (s *Server) Done() <-chan struct{} {
 func (s *Server) ServeRW(rw io.ReadWriteCloser, resize func(cols, rows uint16)) error {
 	close(s.started)
 
-	s.emu = vt.NewEmulatorNoScrollback(s.cols, s.rows)
+	s.emu = vt.NewEmulator(s.cols, s.rows)
 	s.curVisible.Store(true)
 	s.emu.SetCallbacks(vt.Callbacks{
 		CursorVisibility: func(visible bool) { s.curVisible.Store(visible) },
