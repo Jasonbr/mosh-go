@@ -162,6 +162,32 @@ func TestPredictorExpireStale(t *testing.T) {
 	}
 }
 
+func TestPredictorSpaceConfirm(t *testing.T) {
+	p := NewPredictor()
+	p.SetCursor(0, 0)
+	p.Keystroke([]byte("hi there"))
+
+	if len(p.pending) != 8 {
+		t.Fatalf("expected 8 predictions, got %d", len(p.pending))
+	}
+
+	// Server shows "hi " — space at position 2 should confirm, not stall
+	fb := NewFramebuffer(80, 24)
+	fb.CellAt(0, 0).Rune = 'h'
+	fb.CellAt(1, 0).Rune = 'i'
+	fb.CellAt(2, 0).Rune = ' '
+	fb.CurX = 3
+	fb.CurY = 0
+
+	p.Confirm(fb)
+	if len(p.pending) != 5 {
+		t.Fatalf("expected 5 pending after confirming 'hi ', got %d", len(p.pending))
+	}
+	if p.pending[0].r != 't' {
+		t.Fatalf("first remaining should be 't', got %c", p.pending[0].r)
+	}
+}
+
 func TestPredictorNoActivityNoCursorOverride(t *testing.T) {
 	p := NewPredictor()
 

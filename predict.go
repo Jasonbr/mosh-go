@@ -149,8 +149,9 @@ func (p *Predictor) Confirm(fb *Framebuffer) {
 		if cell.Rune == pred.r {
 			// Server confirmed this prediction.
 			confirmed++
-		} else if cell.Rune == ' ' || cell.Rune == 0 {
+		} else if (cell.Rune == ' ' || cell.Rune == 0) && pred.r != ' ' {
 			// Server hasn't caught up yet — stop checking.
+			// (But if we predicted a space, a space cell is a match, handled above.)
 			break
 		} else {
 			// Server diverged — something unexpected happened
