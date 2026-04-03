@@ -107,6 +107,21 @@ func (st *stateTracker) applyDiff(diff []byte, oldNum, newNum, throwawayNum uint
 		}
 	}
 
+	// Hard cap: keep at most 16 states to prevent unbounded memory growth.
+	if len(st.states) > 16 {
+		minKeep := st.latestState
+		if minKeep > 16 {
+			minKeep -= 16
+		} else {
+			minKeep = 0
+		}
+		for n := range st.states {
+			if n < minKeep {
+				delete(st.states, n)
+			}
+		}
+	}
+
 	// Confirm predictions against server state.
 	latest := st.states[st.latestState]
 	if latest != nil {
