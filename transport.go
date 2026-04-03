@@ -63,6 +63,10 @@ type Transport struct {
 	// Latch capability negotiation.
 	localCaps  []byte
 	remoteCaps []byte
+
+	// Reusable zlib writer to avoid per-tick allocations.
+	zlibBuf bytes.Buffer
+	zlibW   *zlib.Writer
 }
 
 const (
@@ -183,7 +187,7 @@ func (t *Transport) Tick() [][]byte {
 
 	// Marshal → compress → fragment → encrypt.
 	pbData := ti.Marshal()
-	compressed := zlibCompress(pbData)
+	compressed := t.zlibCompress(pbData)
 	frags := Fragmentize(t.sentNum, compressed)
 
 	var datagrams [][]byte
@@ -469,13 +473,19 @@ func (t *Transport) updateRTT(tsReply uint16) {
 	}
 }
 
-// zlibCompress compresses data with zlib (default level).
-func zlibCompress(data []byte) []byte {
-	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	w.Write(data)
-	w.Close()
-	return buf.Bytes()
+// zlibCompress compresses data with zlib, reusing the writer.
+func (t *Transport) zlibCompress(data []byte) []byte {
+	t.zlibBuf.Reset()
+	if t.zlibW == nil {
+		t.zlibW = zlib.NewWriter(&t.zlibBuf)
+	} else {
+		t.zlibW.Reset(&t.zlibBuf)
+	}
+	t.zlibW.Write(data)
+	t.zlibW.Close()
+	out := make([]byte, t.zlibBuf.Len())
+	copy(out, t.zlibBuf.Bytes())
+	return out
 }
 
 // zlibDecompress decompresses zlib data. Returns nil on error.
