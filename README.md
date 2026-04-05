@@ -11,6 +11,7 @@ encryption, SSP transport with sequencing and retransmission, datagram
 fragmentation, and the protobuf state sync layer.
 
 [![Watch the demo](demo.png)](https://www.youtube.com/watch?v=iWo9I2bjZkI)
+*[unixshells.com](https://unixshells.com) uses mosh-go compiled to WASM for the web terminal*
 
 ## Install
 
