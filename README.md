@@ -10,6 +10,8 @@ Implements the full mosh wire protocol: AES-128-OCB3 authenticated
 encryption, SSP transport with sequencing and retransmission, datagram
 fragmentation, and the protobuf state sync layer.
 
+[![Watch the demo](demo.png)](https://www.youtube.com/watch?v=iWo9I2bjZkI)
+
 ## Install
 
 ```
@@ -118,7 +120,7 @@ The `-tags osusergo` flag is required to avoid `os/user` CGO issues with `GOOS=j
 
 ## Dependencies
 
-`creack/pty` and the Go standard library.
+`creack/pty`, `golang.org/x/crypto`, and the Go standard library.
 
 ## License
 
