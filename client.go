@@ -260,6 +260,13 @@ func (c *Client) recvLoop() {
 	defer c.wg.Done()
 	buf := make([]byte, maxPayload+64)
 
+	// Track the base state (oldNum) of the most recently buffered output.
+	// Mosh diffs are cumulative snapshots from a given base. When a new diff
+	// has the same oldNum as the previous one, it supersedes the older diff
+	// and we replace the output buffer instead of appending. This prevents
+	// character ghosting caused by concatenating overlapping diffs.
+	var lastOutputOldNum uint64
+
 	for {
 		select {
 		case <-c.done:
@@ -287,6 +294,9 @@ func (c *Client) recvLoop() {
 			continue
 		}
 
+		// Read oldNum AFTER transport.Recv() — it's set by the Recv call above.
+		currentOldNum := c.transport.LastRecvOldNum()
+
 		instrs, err := UnmarshalHostMessage(diff)
 		if err != nil || len(instrs) == 0 {
 			continue
@@ -301,7 +311,14 @@ func (c *Client) recvLoop() {
 		}
 
 		c.mu.Lock()
-		c.output = append(c.output, output...)
+		// Same base → newer diff supersedes older one (replace).
+		// Different base → new incremental content (append).
+		if currentOldNum == lastOutputOldNum {
+			c.output = output
+		} else {
+			c.output = append(c.output, output...)
+		}
+		lastOutputOldNum = currentOldNum
 		c.mu.Unlock()
 
 		select {

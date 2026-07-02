@@ -1,4 +1,4 @@
-module github.com/unixshells/mosh-go
+module github.com/ys-ll/mosh-go
 
 go 1.26.0
 

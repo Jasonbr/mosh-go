@@ -63,10 +63,6 @@ type Transport struct {
 	// Latch capability negotiation.
 	localCaps  []byte
 	remoteCaps []byte
-
-	// Reusable zlib writer to avoid per-tick allocations.
-	zlibBuf bytes.Buffer
-	zlibW   *zlib.Writer
 }
 
 const (
@@ -187,7 +183,7 @@ func (t *Transport) Tick() [][]byte {
 
 	// Marshal → compress → fragment → encrypt.
 	pbData := ti.Marshal()
-	compressed := t.zlibCompress(pbData)
+	compressed := zlibCompress(pbData)
 	frags := Fragmentize(t.sentNum, compressed)
 
 	var datagrams [][]byte
@@ -308,15 +304,12 @@ func (t *Transport) Recv(wire []byte) []byte {
 		}
 	}
 
-	// Check if we have old_num (required to apply diff).
-	hasOld := false
-	for _, n := range t.receivedNums {
-		if n == ti.OldNum {
-			hasOld = true
-			break
-		}
-	}
-	if !hasOld {
+	// Reject diffs that do not chain from our latest acknowledged state.
+	// Mosh diffs MUST be sequential: each diff's oldNum must equal the
+	// newNum of the most recently accepted diff. Accepting diffs from
+	// stale bases (oldNum != ackNum) causes overlapping ANSI sequences
+	// that produce character ghosting and garbled output.
+	if ti.OldNum != t.ackNum {
 		return nil
 	}
 
@@ -473,19 +466,13 @@ func (t *Transport) updateRTT(tsReply uint16) {
 	}
 }
 
-// zlibCompress compresses data with zlib, reusing the writer.
-func (t *Transport) zlibCompress(data []byte) []byte {
-	t.zlibBuf.Reset()
-	if t.zlibW == nil {
-		t.zlibW = zlib.NewWriter(&t.zlibBuf)
-	} else {
-		t.zlibW.Reset(&t.zlibBuf)
-	}
-	t.zlibW.Write(data)
-	t.zlibW.Close()
-	out := make([]byte, t.zlibBuf.Len())
-	copy(out, t.zlibBuf.Bytes())
-	return out
+// zlibCompress compresses data with zlib (default level).
+func zlibCompress(data []byte) []byte {
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	w.Write(data)
+	w.Close()
+	return buf.Bytes()
 }
 
 // zlibDecompress decompresses zlib data. Returns nil on error.
